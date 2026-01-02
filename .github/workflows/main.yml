@@ -1,0 +1,23 @@
+name: Generate Mavely Link
+on:
+  repository_dispatch:
+    types: [generate_link]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: |
+          pip install playwright
+          playwright install chromium
+      - name: Run Generator
+        env:
+          MAVELY_EMAIL: ${{ secrets.MAVELY_EMAIL }}
+          MAVELY_PASSWORD: ${{ secrets.MAVELY_PASSWORD }}
+        run: python generator.py ${{ github.event.client_payload.product_url }}
