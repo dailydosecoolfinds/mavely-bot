@@ -4,9 +4,18 @@ import requests
 
 app = Flask(__name__)
 
-@app.route('/generate', methods=['POST'])
+# --- ESTO ES PARA PROBAR DESDE EL NAVEGADOR ---
+@app.route('/')
+def home():
+    return "Servidor Mavely en linea. Listo para recibir POST en /generate", 200
+
+# --- ESTA ES LA RUTA QUE USA MAKE ---
+@app.route('/generate', methods=['POST', 'GET']) # Permitimos ambos para evitar el 405
 def generate():
-    data = request.json
+    if request.method == 'GET':
+        return "Para generar links, usa una peticion POST desde Make.", 200
+
+    data = request.get_json(force=True) # Forzamos la lectura del JSON
     product_url = data.get('url')
     row_id = data.get('row_id')
     
@@ -19,7 +28,6 @@ def generate():
 
     api_url = "https://creators.mave.ly/api/trpc/links.create?batch=1"
     
-    # Hemos actualizado el User-Agent a uno de una Mac real más moderna
     headers = {
         "Content-Type": "application/json",
         "Cookie": f"__Secure-next-auth.session-token={session_token}",
@@ -33,9 +41,7 @@ def generate():
     payload = {"0": {"json": {"url": product_url}}}
 
     try:
-        # Usamos una sesión para mantener las cookies activas
-        session = requests.Session()
-        response = session.post(api_url, headers=headers, json=payload, timeout=20)
+        response = requests.post(api_url, headers=headers, json=payload, timeout=20)
         
         if response.status_code == 200:
             res_json = response.json()
@@ -43,9 +49,8 @@ def generate():
             requests.post(MAKE_WEBHOOK_URL, json={"status": "success", "mavely_link": mavely_link, "row_id": row_id})
             return jsonify({"status": "ok", "link": mavely_link})
         else:
-            # Enviamos el error detallado a Make para saber qué dice Mavely
-            requests.post(MAKE_WEBHOOK_URL, json={"status": "error", "message": f"Mavely dice: {response.status_code}", "row_id": row_id})
-            return jsonify({"error": f"Mavely Status {response.status_code}"}), response.status_code
+            requests.post(MAKE_WEBHOOK_URL, json={"status": "error", "message": f"Mavely: {response.status_code}", "row_id": row_id})
+            return jsonify({"error": "Mavely Error"}), response.status_code
             
     except Exception as e:
         return jsonify({"error": str(e)}), 500
