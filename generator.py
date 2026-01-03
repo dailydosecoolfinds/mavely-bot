@@ -6,71 +6,77 @@ from playwright.sync_api import sync_playwright
 
 def generate_mavely_link(product_url, row_id):
     # --- CONFIGURACIÓN ---
-    MAKE_WEBHOOK_URL = "https://hook.us1.make.com/f74d3eppf9xthkcz8pxumuss7tvcr8k9" # ASEGÚRATE DE QUE ESTÉ BIEN PUESTA
+    MAKE_WEBHOOK_URL = "https://hook.us1.make.com/f74d3eppf9xthkcz8pxumuss7tvcr8k9" 
     
     email = os.environ.get('MAVELY_EMAIL')
     password = os.environ.get('MAVELY_PASSWORD')
 
     with sync_playwright() as p:
-        # Usamos un User Agent de una persona real para evitar bloqueos
+        # Iniciamos con parámetros de navegador real
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            viewport={'width': 1280, 'height': 720},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
         )
         page = context.new_page()
 
         try:
-            print(f"Iniciando proceso para la fila {row_id}...")
+            print(f"Procesando fila {row_id}...")
             
-            # URL CORREGIDA: creators.joinmavely.com
-            page.goto("https://creators.joinmavely.com/login", wait_until="domcontentloaded")
+            # 1. Navegación con espera extendida
+            page.goto("https://creators.joinmavely.com/login", wait_until="networkidle", timeout=60000)
             
-            # Login
-            page.wait_for_selector('input[type="email"]')
-            page.fill('input[type="email"]', email)
-            page.fill('input[type="password"]', password)
+            # A veces hay una pantalla de carga, esperamos a que el input sea visible
+            print("Esperando formulario de login...")
+            page.wait_for_selector('input[name="email"], input[type="email"]', state="visible", timeout=45000)
+            
+            # 2. Login
+            page.fill('input[name="email"], input[type="email"]', email)
+            page.fill('input[name="password"], input[type="password"]', password)
             page.click('button[type="submit"]')
             
-            # Esperar a entrar
+            # 3. Esperar al Dashboard
+            print("Login enviado, esperando Dashboard...")
             page.wait_for_url("**/dashboard**", timeout=60000)
-            print("Login exitoso.")
-
-            # Ir a la página de herramientas/links
+            
+            # 4. Ir al Link Creator
             page.goto("https://creators.joinmavely.com/tools/link-creator", wait_until="networkidle")
             
-            # Pegar URL y Generar
-            input_selector = 'input[placeholder*="Paste"]'
-            page.wait_for_selector(input_selector)
-            page.fill(input_selector, product_url)
+            # 5. Pegar y Generar
+            input_xpath = "//input[contains(@placeholder, 'Paste')] | //input[contains(@placeholder, 'URL')]"
+            page.wait_for_selector(input_xpath, timeout=30000)
+            page.fill(input_xpath, product_url)
             page.keyboard.press("Enter")
             
-            # Esperar el resultado
-            time.sleep(7) 
+            # Esperar a que el link aparezca (suele tardar unos segundos en generarse)
+            time.sleep(8)
             
-            # Buscar el link de mavely en el texto de la página
-            content = page.content()
-            if "mavely.app.link" in content:
-                # Extraemos el link usando una técnica más flexible
-                mavely_link = page.locator('text=mavely.app.link').first.inner_text()
+            # 6. Extraer el link
+            # Buscamos el texto que contiene el dominio de mavely
+            mavely_link_locator = page.locator('text=mavely.app.link').first
+            if mavely_link_locator.is_visible():
+                mavely_link = mavely_link_locator.inner_text()
                 status = "success"
-                print(f"Link creado: {mavely_link}")
+                print(f"Link generado: {mavely_link}")
             else:
-                mavely_link = "No se pudo extraer el link"
-                status = "error"
+                # Intento alternativo por atributo de valor
+                mavely_link = page.eval_on_selector('input[value*="mavely.app.link"]', 'el => el.value')
+                status = "success"
 
-            # 4. ENVIAR A MAKE
-            payload = {
+            # Enviar a Make
+            requests.post(MAKE_WEBHOOK_URL, json={
                 "status": status,
                 "mavely_link": mavely_link,
-                "row_id": row_id,
-                "original_url": product_url
-            }
-            requests.post(MAKE_WEBHOOK_URL, json=payload)
+                "row_id": row_id
+            })
 
         except Exception as e:
-            print(f"Error: {e}")
-            requests.post(MAKE_WEBHOOK_URL, json={"status": "error", "message": str(e), "row_id": row_id})
-        
+            print(f"Error detectado: {e}")
+            requests.post(MAKE_WEBHOOK_URL, json={
+                "status": "error",
+                "message": str(e),
+                "row_id": row_id
+            })
         finally:
             browser.close()
 
