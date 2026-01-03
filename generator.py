@@ -1,65 +1,83 @@
 import os
+import time
 import requests
 import sys
+from playwright.sync_api import sync_playwright
 
 def generate_mavely_link(product_url, row_id):
-    # --- CONFIGURACIÓN ---
-    MAKE_WEBHOOK_URL = "https://hook.us1.make.com/f74d3eppf9xthkcz8pxumuss7tvcr8k9" 
-    session_token = os.environ.get('MAVELY_COOKIES')
+    MAKE_WEBHOOK_URL = "https://hook.us1.make.com/f74d3eppf9xthkcz8pxumuss7tvcr8k9"
+    email = os.environ.get('MAVELY_EMAIL')
+    password = os.environ.get('MAVELY_PASSWORD')
 
-    print(f"--- Fila: {row_id} | Generando link para: {product_url} ---")
+    print(f"--- Iniciando Fila: {row_id} ---")
 
-    # Nueva URL de la API basada en el protocolo tRPC que usa Mavely ahora
-    api_url = "https://creators.mave.ly/api/trpc/links.create?batch=1"
-    
-    headers = {
-        "Content-Type": "application/json",
-        "Cookie": f"__Secure-next-auth.session-token={session_token}",
-        "x-trpc-source": "react", # Este encabezado es CRUCIAL ahora
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Referer": "https://creators.mave.ly/tools/link-creator"
-    }
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(viewport={'width': 1280, 'height': 800})
+        page = context.new_page()
 
-    # El cuerpo del mensaje (payload) ahora debe ir numerado por el formato tRPC
-    payload = {
-        "0": {
-            "json": {
-                "url": product_url
-            }
-        }
-    }
+        try:
+            print("Accediendo a Mavely...")
+            page.goto("https://creators.mave.ly/login", wait_until="networkidle")
+            
+            # 1. Login Manual (Más robusto)
+            if page.locator('input[type="email"]').is_visible():
+                print("Introduciendo credenciales...")
+                page.fill('input[type="email"]', email)
+                page.fill('input[type="password"]', password)
+                page.click('button[type="submit"]')
+                page.wait_for_load_state("networkidle")
+                time.sleep(5)
 
-    try:
-        response = requests.post(api_url, headers=headers, json=payload, timeout=20)
-        
-        if response.status_code == 200:
-            data = response.json()
-            # Estructura de respuesta tRPC: [0].result.data.json.link
-            try:
-                mavely_link = data[0]['result']['data']['json']['link']
-                print(f"🚀 ¡ÉXITO TOTAL!: {mavely_link}")
-                
-                requests.post(MAKE_WEBHOOK_URL, json={
-                    "status": "success",
-                    "mavely_link": mavely_link,
-                    "row_id": row_id
-                })
-            except (KeyError, IndexError):
-                raise Exception(f"La API respondió pero el formato cambió: {data}")
-        
-        elif response.status_code == 401:
-            raise Exception("Token expirado. Por favor, obtén un nuevo session-token.")
-        else:
-            raise Exception(f"Error de API {response.status_code}: {response.text}")
+            # 2. Ir a la herramienta
+            print("Navegando al Link Creator...")
+            page.goto("https://creators.mave.ly/tools/link-creator", wait_until="networkidle")
+            time.sleep(8)
 
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        requests.post(MAKE_WEBHOOK_URL, json={
-            "status": "error",
-            "message": str(e),
-            "row_id": row_id
-        })
+            # 3. Quitar basura (Modales, anuncios, capas)
+            page.evaluate("() => { document.querySelectorAll('[class*=\"backdrop\"], [class*=\"modal\"], [class*=\"Dialog\"]').forEach(el => el.remove()); }")
+
+            # 4. Buscar el input por su función, no por su nombre
+            print("Buscando campo de texto...")
+            # Buscamos cualquier input que sea para escribir (textbox)
+            input_field = page.get_by_role("textbox").first
+            
+            if not input_field.is_visible():
+                # Si no lo ve, intenta buscar por el placeholder que usa Mavely
+                input_field = page.locator('input[placeholder*="http"], input[placeholder*="Paste"]').first
+
+            input_field.click()
+            input_field.fill(product_url)
+            print("URL pegada. Generando...")
+            page.keyboard.press("Enter")
+            
+            # 5. Capturar el link generado
+            time.sleep(12)
+            
+            # Buscamos el link en el texto de la página
+            page_content = page.content()
+            import re
+            links = re.findall(r'https://mavely\.app\.link/\w+', page_content)
+            
+            if links:
+                final_link = links[0]
+                print(f"🚀 ENLACE: {final_link}")
+                requests.post(MAKE_WEBHOOK_URL, json={"status": "success", "mavely_link": final_link, "row_id": row_id})
+            else:
+                # Si no lo encuentra, buscamos un botón que diga "Copy"
+                copy_btn = page.get_by_text("Copy Link").first
+                if copy_btn.is_visible():
+                    print("Link detectado mediante botón Copy.")
+                    requests.post(MAKE_WEBHOOK_URL, json={"status": "success", "mavely_link": "Generado (Ver en Mavely)", "row_id": row_id})
+                else:
+                    raise Exception("No se pudo extraer el link.")
+
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            page.screenshot(path="error_debug.png")
+            requests.post(MAKE_WEBHOOK_URL, json={"status": "error", "message": str(e), "row_id": row_id})
+        finally:
+            browser.close()
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 3:
-        generate_mavely_link(sys.argv[1], sys.argv[2])
+    generate_mavely_link(sys.argv[1], sys.argv[2])
