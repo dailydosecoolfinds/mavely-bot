@@ -7,7 +7,7 @@ from playwright.sync_api import sync_playwright
 def generate_mavely_link(product_url, row_id):
     # --- CONFIGURACIÓN ---
     # PEGA AQUÍ TU URL DE WEBHOOK DE MAKE (ESCENARIO DE RETORNO)
-    MAKE_WEBHOOK_URL = "https://hook.us1.make.com/tu_codigo_aqui"
+    MAKE_WEBHOOK_URL = "https://hook.us1.make.com/f74d3eppf9xthkcz8pxumuss7tvcr8k9"
     
     # Credenciales desde variables de entorno (GitHub Secrets)
     email = os.environ.get('MAVELY_EMAIL')
