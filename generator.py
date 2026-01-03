@@ -25,57 +25,48 @@ def generate_mavely_link(product_url, row_id):
             print(f"Abriendo Link Creator (Fila {row_id})...")
             page.goto("https://creators.joinmavely.com/tools/link-creator", wait_until="networkidle", timeout=60000)
             
-            # Espera para que cargue el contenido dinámico
-            time.sleep(7)
+            # Espera a que la app de Mavely se monte por completo
+            time.sleep(12)
 
-            # --- ESCANEO INTELIGENTE ---
-            # Buscamos todos los inputs y filtramos el que parece ser el generador
-            found_input = False
-            inputs = page.query_selector_all("input")
+            # ESTRATEGIA: Navegación por Teclado (Focus)
+            # Presionamos Tab un par de veces para entrar al área de contenido y el campo de URL
+            print("Navegando hacia el campo de entrada...")
+            page.keyboard.press("Tab")
+            time.sleep(1)
+            page.keyboard.press("Tab")
+            time.sleep(1)
             
-            print(f"Se encontraron {len(inputs)} campos de entrada.")
-            
-            for i, el in enumerate(inputs):
-                placeholder = el.get_attribute("placeholder") or ""
-                if "http" in placeholder.lower() or "paste" in placeholder.lower() or "url" in placeholder.lower():
-                    print(f"Campo detectado por placeholder: '{placeholder}'")
-                    el.click()
-                    el.fill("")
-                    el.fill(product_url)
-                    found_input = True
-                    break
-            
-            # Si no se encontró por placeholder, intentamos el primer input visible
-            if not found_input:
-                for el in inputs:
-                    if el.is_visible():
-                        print("Usando primer campo visible disponible.")
-                        el.click()
-                        el.fill(product_url)
-                        found_input = True
-                        break
-
-            if not found_input:
-                raise Exception("No se pudo localizar el cuadro de texto de la URL.")
-
-            # Presionar Enter para generar
+            # Escribimos la URL directamente (esto funciona incluso si el selector falla)
+            print(f"Escribiendo URL: {product_url}")
+            page.keyboard.type(product_url, delay=100) # delay simula escritura humana
+            time.sleep(2)
             page.keyboard.press("Enter")
-            print("Esperando generación del enlace...")
             
-            # Esperamos específicamente a que aparezca un elemento que contenga "mavely.app.link"
-            # O un botón que permita copiar el link
-            page.wait_for_selector('text=mavely.app.link', timeout=30000)
+            print("URL enviada. Esperando resultado...")
             
-            # Extraer el texto del link
-            # Intentamos obtener el texto que contiene el dominio del link de afiliado
-            link_element = page.locator('text=mavely.app.link').first
-            mavely_link = link_element.inner_text()
+            # Intentamos detectar el link generado por su prefijo
+            # Si el selector falla, esperamos un tiempo razonable
+            try:
+                page.wait_for_selector('text=mavely.app.link', timeout=20000)
+                link_element = page.locator('text=mavely.app.link').first
+                mavely_link = link_element.inner_text()
+            except:
+                # Si no aparece el texto, buscamos cualquier elemento que parezca un link generado
+                print("Selector de texto falló, buscando link por atributo...")
+                mavely_link = page.evaluate('''() => {
+                    const links = Array.from(document.querySelectorAll('a, p, span'));
+                    const found = links.find(el => el.innerText.includes('mavely.app.link'));
+                    return found ? found.innerText : null;
+                }''')
+
+            if not mavely_link:
+                raise Exception("El enlace no apareció en pantalla tras enviar la URL.")
             
-            print(f"¡Link generado con éxito!: {mavely_link}")
+            print(f"¡Éxito!: {mavely_link}")
 
             requests.post(MAKE_WEBHOOK_URL, json={
                 "status": "success",
-                "mavely_link": mavely_link,
+                "mavely_link": mavely_link.strip(),
                 "row_id": row_id
             })
 
