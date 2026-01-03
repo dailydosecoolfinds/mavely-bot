@@ -18,10 +18,13 @@ jobs:
         run: |
           pip install playwright requests
           playwright install chromium
+          # Esta línea es clave para que el navegador funcione en Linux:
+          playwright install-deps chromium
           
       - name: Run Generator
         env:
           MAVELY_EMAIL: ${{ secrets.MAVELY_EMAIL }}
           MAVELY_PASSWORD: ${{ secrets.MAVELY_PASSWORD }}
-        # Aquí pasamos los dos parámetros que el script espera
-        run: python generator.py "${{ github.event.client_payload.product_url }}" "${{ github.event.client_payload.row_id }}"
+          MAVELY_COOKIES: ${{ secrets.MAVELY_COOKIES }}
+        # Asegúrate de que en Make el campo se llame "url". Si se llama "product_url", déjalo como estaba.
+        run: python generator.py "${{ github.event.client_payload.url }}" "${{ github.event.client_payload.row_id }}"
