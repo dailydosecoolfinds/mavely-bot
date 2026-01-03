@@ -9,41 +9,48 @@ def generate_mavely_link(product_url, row_id):
 
     print(f"--- Fila: {row_id} | Generando link para: {product_url} ---")
 
-    # URL de la API interna de Mavely
-    api_url = "https://creators.mave.ly/api/links/create"
+    # Nueva URL de la API basada en el protocolo tRPC que usa Mavely ahora
+    api_url = "https://creators.mave.ly/api/trpc/links.create?batch=1"
     
     headers = {
         "Content-Type": "application/json",
         "Cookie": f"__Secure-next-auth.session-token={session_token}",
+        "x-trpc-source": "react", # Este encabezado es CRUCIAL ahora
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Referer": "https://creators.mave.ly/tools/link-creator"
     }
 
-    payload = {"url": product_url}
+    # El cuerpo del mensaje (payload) ahora debe ir numerado por el formato tRPC
+    payload = {
+        "0": {
+            "json": {
+                "url": product_url
+            }
+        }
+    }
 
     try:
-        # Petición directa a la API
         response = requests.post(api_url, headers=headers, json=payload, timeout=20)
         
-        if response.status_code in [200, 201]:
+        if response.status_code == 200:
             data = response.json()
-            # Extraemos el link de la respuesta
-            mavely_link = data.get('link') or data.get('data', {}).get('link')
-            
-            if mavely_link:
-                print(f"🚀 ¡ÉXITO!: {mavely_link}")
+            # Estructura de respuesta tRPC: [0].result.data.json.link
+            try:
+                mavely_link = data[0]['result']['data']['json']['link']
+                print(f"🚀 ¡ÉXITO TOTAL!: {mavely_link}")
+                
                 requests.post(MAKE_WEBHOOK_URL, json={
                     "status": "success",
                     "mavely_link": mavely_link,
                     "row_id": row_id
                 })
-            else:
-                raise Exception(f"Respuesta de API sin link: {data}")
+            except (KeyError, IndexError):
+                raise Exception(f"La API respondió pero el formato cambió: {data}")
         
         elif response.status_code == 401:
-            raise Exception("Token expirado. Copia el valor de la cookie nuevamente.")
+            raise Exception("Token expirado. Por favor, obtén un nuevo session-token.")
         else:
-            raise Exception(f"Error Mavely API: {response.status_code} - {response.text}")
+            raise Exception(f"Error de API {response.status_code}: {response.text}")
 
     except Exception as e:
         print(f"❌ Error: {e}")
