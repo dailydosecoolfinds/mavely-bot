@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import sys
+import re
 from playwright.sync_api import sync_playwright
 
 def generate_mavely_link(product_url, row_id):
@@ -9,86 +10,74 @@ def generate_mavely_link(product_url, row_id):
     email = os.environ.get('MAVELY_EMAIL')
     password = os.environ.get('MAVELY_PASSWORD')
 
-    print(f"--- Fila: {row_id} | URL: {product_url} ---")
+    print(f"--- Iniciando | Fila: {row_id} ---")
 
     with sync_playwright() as p:
-        # Iniciamos sin cookies previas para evitar conflictos de sesión expirada
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={'width': 1280, 'height': 800})
+        # Argumentos para desactivar la detección de automatización
+        browser = p.chromium.launch(headless=True, args=[
+            '--disable-blink-features=AutomationControlled',
+            '--no-sandbox'
+        ])
+        
+        context = browser.new_context(
+            viewport={'width': 1280, 'height': 800},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        )
+        
+        # Inyectar un script para ocultar el objeto 'navigator.webdriver'
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
         page = context.new_page()
 
         try:
-            # 1. IR AL LOGIN PRIMERO (Para asegurar que estamos dentro)
-            print("Paso 1: Asegurando sesión...")
+            print("Paso 1: Login...")
             page.goto("https://creators.joinmavely.com/login", wait_until="networkidle")
             
-            if page.locator('input[name="email"]').is_visible():
-                print("Iniciando sesión desde cero...")
-                page.locator('input[name="email"]').fill(email)
-                page.locator('input[name="password"]').fill(password)
-                page.click('button[type="submit"]')
-                page.wait_for_url("**/home", timeout=60000)
-                print("✅ Login completado.")
+            # Esperar a que el formulario sea real
+            page.wait_for_selector('input[name="email"]', timeout=30000)
+            page.fill('input[name="email"]', email)
+            page.fill('input[name="password"]', password)
+            page.click('button[type="submit"]')
             
-            # 2. IR A LA HERRAMIENTA
-            print("Paso 2: Entrando al creador de links...")
+            # Esperar a que el dashboard cargue de verdad
+            print("Esperando Dashboard...")
+            page.wait_for_url("**/home", timeout=60000)
+            time.sleep(5)
+
+            print("Paso 2: Herramienta de Links...")
             page.goto("https://creators.joinmavely.com/tools/link-creator", wait_until="networkidle")
-            time.sleep(8)
-
-            # 3. ELIMINAR CUALQUIER CAPA QUE BLOQUEE (Pop-ups)
-            # Este código borra cualquier cosa que esté por encima del cuadro de texto
-            page.evaluate("""() => {
-                const selectors = ['.MuiDialog-root', '.MuiBackdrop-root', '[role="presentation"]'];
-                selectors.forEach(s => {
-                    const elements = document.querySelectorAll(s);
-                    elements.forEach(el => el.remove());
-                });
-            }""")
-            print("Limpieza de pop-ups ejecutada.")
-
-            # 4. BUSCAR EL CUADRO DE TEXTO (Selector simplificado)
-            print("Paso 3: Localizando entrada de texto...")
-            # Usamos el selector más básico posible que tiene Mavely para ese campo
-            input_box = page.locator('input').first 
             
-            input_box.wait_for(state="visible", timeout=20000)
+            # ESPERA CRÍTICA: En lugar de buscar un input genérico, buscamos la estructura de Mavely
+            print("Buscando interfaz de creación...")
+            # Mavely usa un input dentro de un div con una clase específica o placeholder
+            selector_final = 'input[placeholder*="Paste"], input[type="text"]'
+            page.wait_for_selector(selector_final, state="visible", timeout=45000)
+            
+            input_box = page.locator(selector_final).first
             input_box.click()
-            
-            # Escribir con un delay mayor para asegurar que el sistema lo procesa
-            print("Escribiendo URL...")
-            page.keyboard.type(product_url, delay=60)
-            time.sleep(2)
+            page.keyboard.type(product_url, delay=100) # Más lento para parecer humano
+            time.sleep(1)
             page.keyboard.press("Enter")
             
-            # 5. CAPTURAR EL LINK
-            print("Paso 4: Extrayendo resultado...")
+            print("Paso 3: Extracción...")
+            # Mavely a veces tarda, esperamos a que el link aparezca en el DOM
             time.sleep(15)
 
-            # Buscamos el link en los elementos <a> o en el texto
-            mavely_link = page.evaluate("""() => {
-                const links = Array.from(document.querySelectorAll('a'));
-                const found = links.find(a => a.href.includes('mavely.app.link'));
-                return found ? found.href : null;
-            }""")
-
-            if not mavely_link:
-                # Intento final por texto plano
-                text = page.content()
-                import re
-                match = re.search(r'mavely\.app\.link\/[a-zA-Z0-9]+', text)
-                if match:
-                    mavely_link = "https://" + match.group(0)
-
-            if mavely_link:
-                print(f"🚀 ¡CONSEGUIDO!: {mavely_link}")
+            # Buscamos cualquier texto que parezca un link de mavely
+            content = page.content()
+            match = re.search(r'mavely\.app\.link\/[a-zA-Z0-9]+', content)
+            
+            if match:
+                mavely_link = "https://" + match.group(0)
+                print(f"🚀 LOGRADO: {mavely_link}")
                 requests.post(MAKE_WEBHOOK_URL, json={"status": "success", "mavely_link": mavely_link, "row_id": row_id})
             else:
-                # Si falló la extracción pero el bot llegó aquí, tomamos foto
+                # Si falló, tomamos una captura para ver qué hay en pantalla
                 page.screenshot(path="debug_final.png")
-                raise Exception("El link no apareció en la página. Mavely podría estar lento.")
+                raise Exception("Link no encontrado tras login exitoso.")
 
         except Exception as e:
-            print(f"❌ Error final: {e}")
+            print(f"❌ Error detallado: {e}")
             requests.post(MAKE_WEBHOOK_URL, json={"status": "error", "message": str(e), "row_id": row_id})
         finally:
             browser.close()
