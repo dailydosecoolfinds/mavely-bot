@@ -9,75 +9,73 @@ def generate_mavely_link(product_url, row_id):
     email = os.environ.get('MAVELY_EMAIL')
     password = os.environ.get('MAVELY_PASSWORD')
 
-    print(f"--- Iniciando Fila: {row_id} ---")
+    print(f"--- Iniciando Fila: {row_id} | URL: {product_url} ---")
 
     with sync_playwright() as p:
+        # Modo headless=True (obligatorio en GitHub)
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(viewport={'width': 1280, 'height': 800})
         page = context.new_page()
 
         try:
-            print("Accediendo a Mavely...")
-            page.goto("https://creators.mave.ly/login", wait_until="networkidle")
+            print("Paso 1: Login...")
+            page.goto("https://creators.mave.ly/login", wait_until="networkidle", timeout=60000)
             
-            # 1. Login Manual (Más robusto)
-            if page.locator('input[type="email"]').is_visible():
-                print("Introduciendo credenciales...")
-                page.fill('input[type="email"]', email)
-                page.fill('input[type="password"]', password)
-                page.click('button[type="submit"]')
-                page.wait_for_load_state("networkidle")
-                time.sleep(5)
+            # Llenar login
+            page.wait_for_selector('input[type="email"]', timeout=20000)
+            page.fill('input[type="email"]', email)
+            page.fill('input[type="password"]', password)
+            page.click('button[type="submit"]')
+            
+            # Esperar a entrar
+            print("Esperando Dashboard...")
+            time.sleep(10) 
 
-            # 2. Ir a la herramienta
-            print("Navegando al Link Creator...")
+            # Ir a la herramienta
+            print("Paso 2: Herramienta de Links...")
             page.goto("https://creators.mave.ly/tools/link-creator", wait_until="networkidle")
-            time.sleep(8)
+            time.sleep(10)
 
-            # 3. Quitar basura (Modales, anuncios, capas)
-            page.evaluate("() => { document.querySelectorAll('[class*=\"backdrop\"], [class*=\"modal\"], [class*=\"Dialog\"]').forEach(el => el.remove()); }")
-
-            # 4. Buscar el input por su función, no por su nombre
-            print("Buscando campo de texto...")
-            # Buscamos cualquier input que sea para escribir (textbox)
-            input_field = page.get_by_role("textbox").first
+            # Intentar localizar el cuadro de texto de varias formas
+            print("Paso 3: Localizando campo de pegado...")
+            # Intentamos cerrar cualquier pop-up primero
+            page.keyboard.press("Escape")
             
-            if not input_field.is_visible():
-                # Si no lo ve, intenta buscar por el placeholder que usa Mavely
-                input_field = page.locator('input[placeholder*="http"], input[placeholder*="Paste"]').first
-
+            # Buscamos el input
+            input_selector = 'input[placeholder*="http"], input[placeholder*="Paste"], .MuiInputBase-input'
+            page.wait_for_selector(input_selector, timeout=30000)
+            
+            input_field = page.locator(input_selector).first
             input_field.click()
             input_field.fill(product_url)
-            print("URL pegada. Generando...")
+            time.sleep(1)
             page.keyboard.press("Enter")
             
-            # 5. Capturar el link generado
-            time.sleep(12)
-            
-            # Buscamos el link en el texto de la página
-            page_content = page.content()
+            print("Paso 4: Esperando Link...")
+            time.sleep(15)
+
+            # Extraer link por texto
+            content = page.content()
             import re
-            links = re.findall(r'https://mavely\.app\.link/\w+', page_content)
+            links = re.findall(r'https://mavely\.app\.link/\w+', content)
             
             if links:
-                final_link = links[0]
-                print(f"🚀 ENLACE: {final_link}")
-                requests.post(MAKE_WEBHOOK_URL, json={"status": "success", "mavely_link": final_link, "row_id": row_id})
+                mavely_link = links[0]
+                print(f"🚀 ENLACE CREADO: {mavely_link}")
+                requests.post(MAKE_WEBHOOK_URL, json={"status": "success", "mavely_link": mavely_link, "row_id": row_id})
             else:
-                # Si no lo encuentra, buscamos un botón que diga "Copy"
-                copy_btn = page.get_by_text("Copy Link").first
-                if copy_btn.is_visible():
-                    print("Link detectado mediante botón Copy.")
-                    requests.post(MAKE_WEBHOOK_URL, json={"status": "success", "mavely_link": "Generado (Ver en Mavely)", "row_id": row_id})
-                else:
-                    raise Exception("No se pudo extraer el link.")
+                raise Exception("No se encontró el enlace generado en la página.")
 
         except Exception as e:
             print(f"❌ Error: {e}")
-            page.screenshot(path="error_debug.png")
+            # Si falla, guardamos captura para ver el error real
+            page.screenshot(path="debug_error.png")
             requests.post(MAKE_WEBHOOK_URL, json={"status": "error", "message": str(e), "row_id": row_id})
         finally:
             browser.close()
 
 if __name__ == "__main__":
-    generate_mavely_link(sys.argv[1], sys.argv[2])
+    if len(sys.argv) >= 3:
+        generate_mavely_link(sys.argv[1], sys.argv[2])
+    else:
+        print("Error: Faltan argumentos (url o row_id)")
